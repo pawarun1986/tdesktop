@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "ui/rp_widget.h"
 #include "ui/ui_utility.h"
 #include "styles/style_chat.h" // textMoreIconEmoji
@@ -503,15 +504,15 @@ void StarsRating::updateData(Data::StarsRating rating) {
 	if (!rating) {
 		_shape = nullptr;
 		_widthValue = 0;
+		_currentLevel = 0;
 	} else {
 		_shape = SelectShape(rating.level);
-		_collapsedText.setText(
-			st::levelStyle,
-			(rating.level < 0
-				? QString()
-				: Lang::FormatCountDecimal(rating.level)));
+		_collapsedText = (rating.level < 0
+			? QString()
+			: Lang::FormatCountDecimal(rating.level));
 		const auto &margin = st::levelMargin;
 		_widthValue = _shape->icon.width() + margin.right() - margin.left();
+		_currentLevel = rating.level;
 	}
 	updateWidth();
 }
@@ -534,22 +535,64 @@ void StarsRating::moveTo(int x, int y) {
 	_widget->move(x - st::levelMargin.left(), y - st::levelMargin.top());
 }
 
+void StarsRating::setOpacity(float64 opacity) {
+	_opacity = opacity;
+	_widget->update();
+}
+
+void StarsRating::setCustomColors(
+		std::optional<QColor> textColor,
+		std::optional<QColor> shapeColor) {
+	_customTextColor = textColor;
+	_customShapeColor = shapeColor;
+	_cachedLevel = std::numeric_limits<int>::min();
+	_widget->update();
+}
+
 void StarsRating::paint(QPainter &p) {
+	p.setOpacity(_opacity);
 	if (!_shape) {
 		return;
 	}
-	_shape->icon.paint(p, 0, 0, _widget->width());
 
-	const auto x = (_widget->width() - _collapsedText.maxWidth()) / 2;
-	p.setPen(st::levelTextFg);
-	_collapsedText.draw(p, {
-		.position = QPoint(x, 0) + _shape->position,
-		.availableWidth = _collapsedText.maxWidth(),
-	});
+	if (_cachedLevel != _currentLevel) {
+		const auto ratio = style::DevicePixelRatio();
+		const auto size = _widget->size() * ratio;
+		_cache = QImage(size, QImage::Format_ARGB32_Premultiplied);
+		_cache.setDevicePixelRatio(ratio);
+		_cache.fill(Qt::transparent);
+
+		auto q = QPainter(&_cache);
+		if (_customShapeColor) {
+			_shape->icon.paint(q, 0, 0, _widget->width(), *_customShapeColor);
+		} else {
+			_shape->icon.paint(q, 0, 0, _widget->width());
+		}
+
+		if (!_collapsedText.isEmpty()) {
+			q.setPen(_customTextColor
+				? *_customTextColor
+				: st::levelTextFg->c);
+			q.setFont(st::levelStyle.font);
+			q.drawText(
+				Rect(_shape->icon.size()),
+				Qt::AlignCenter,
+				_collapsedText);
+		}
+
+		_cachedLevel = _currentLevel;
+	}
+
+	p.setOpacity(_opacity);
+	p.drawImage(0, 0, _cache);
 }
 
 rpl::producer<int> StarsRating::widthValue() const {
 	return _widthValue.value();
+}
+
+int StarsRating::width() const {
+	return _widthValue.current();
 }
 
 rpl::lifetime &StarsRating::lifetime() {
